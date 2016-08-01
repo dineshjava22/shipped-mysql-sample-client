@@ -1,57 +1,89 @@
+import MySQLdb
 from bson import ObjectId
+from urlparse import urlparse
 import os
-import mysql.connector
-from mysql.connector import errorcode
 
-MYSQL_DEFAULT_CONFIG = {
-    'host': 'localhost',
-    'port': 3306,
-    'user': 'testuser',
-    'password': 'test',
-    'database': 'test'
-}
-
-CREATE_TBL = "CREATE TABLE IF NOT EXISTS tbl_counter(id int PRIMARY KEY, counter INT DEFAULT 0);"
-SEED_DATA = 'INSERT INTO tbl_counter(id, counter) VALUES(1, 0) ON DUPLICATE KEY UPDATE counter = counter + 1;'
-
-id = 0
-client = None
+MYSQL_URI = "mysql://mysql:mysql@localhost:3306/mysqlDB"
 
 def dbConnection():
     deployTarget = os.environ.get('DEPLOY_TARGET')
-    connConfig = {
-        'host': os.environ.get(''),
-        'user': os.environ.get('MYSQL_USER'),
-        'password': os.environ.get('MYSQL_PASSWORD'),
-        'database': os.environ.get('MYSQL_DATABASE')
-    }
-    if deployTarget == "LOCAL_SANDBOX":
-        connConfig = MYSQL_DEFAULT_CONFIG
+    constr = os.environ.get('HOST_MYSQL_SINGLE')
+    for i in range(0, 10):
+        if i > 0:
+            print("DB connection attempt %d of 10 failed; retrying connect string (%s)".format(i, constr))
 
-    print("Current deploy target %s" % deployTarget)
+        if deployTarget == "LOCAL_SANDBOX" or constr is None:
+            constr = MYSQL_URI
+
+        try:
+            result = urlparse(constr)
+            client = MySQLdb.connect(host=result.hostname,
+                                     user=result.username,
+                                     passwd=result.password,
+                                     db=result.path[1:].split("?")[0])
+            return client
+        except Exception as err:
+            print(err, constr)
+
+
+def checkTableExists(dbcon, tablename):
+    print ("check table %s" % tablename)
+    dbcur = dbcon.cursor()
+    dbcur.execute("""
+        SELECT COUNT(*)
+        FROM information_schema.tables
+        WHERE table_name = '{0}'
+        """.format(tablename.replace('\'', '\'\'')))
+    if dbcur.fetchone()[0] == 1:
+        dbcur.close()
+        return True
+
+    dbcur.close()
+    return False
+
+
+def createTable(dbcon, tablename):
+    dbcur = dbcon.cursor()
+    sql = '''CREATE TABLE {0} (
+       vote int DEFAULT 0
+       ) ENGINE=MyISAM DEFAULT CHARSET=latin1
+       '''.format(tablename)
     try:
-        client = mysql.connector.connect(**connConfig)
-    except mysql.connector.Error as err:
-        if err.errno == errorcode.ER_ACCESS_DENIED_ERROR:
-            print("Something is wrong with your user name or password")
-        elif err.errno == errorcode.ER_BAD_DB_ERROR:
-            print("Database does not exist")
-        else:
-            print(err)
+        dbcur.execute(sql)
+        dbcur.execute("insert into vote value (0)")
+        dbcon.commit()
+    except Exception as e:
+        pass
+    dbcur.close()
 
-    return client
+
+def getValue(dbcon):
+    sql = "SELECT vote FROM vote LIMIT 1"
+    dbcur = dbcon.cursor()
+    dbcur.execute(sql)
+    r = dbcur.fetchone()
+    print "get count: %s" % r
+    dbcur.close()
+    return r[0]
+
+
+def setValue(db, val):
+    sql = "update vote set vote= %s" % val
+    print "set count: %s" % sql
+    dbcur = db.cursor()
+    dbcur.execute(sql)
+    dbcur.close()
+    db.commit()
+
+
 
 def setupDB():
-    dbConnection()
-    try:
-        cursor = client.cursor()
-        cursor.execute(CREATE_TBL)
-        cursor.execute(SEED_DATA)
-        id = cursor.lastrowid
-    except mysql.connector.Error as err:
-        print(err.msg)
+    db = dbConnection()
 
-    return id
+    if checkTableExists(db, "vote"):
+        getValue(db)
+    else:
+        createTable(db, "vote")
+        setValue(db, 0)
+    db.close()
 
-def closeDB():
-    client.close()

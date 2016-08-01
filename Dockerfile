@@ -1,5 +1,5 @@
 FROM python:3.5
-EXPOSE 5001
+EXPOSE 5000
 WORKDIR /app
 COPY . /app
 
